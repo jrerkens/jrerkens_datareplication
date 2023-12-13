@@ -1,0 +1,497 @@
+---
+title: "Keeping 21st Century Paleontology Grounded: Quantitative Genetic Analyses
+  and Ancestral State Reconstruction Re-Emphasize the Essentiality of Fossils"
+author: "Jimmy Erkens"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float: true
+    code_folding: show
+    theme: journal
+---
+
+# Load in the packages
+
+```{r, packages, warning=F}
+library(geiger) # this is for constructing the phylogenetic ANOVA, includes phytools
+library(phytools)
+library(ape) # geiger includes ape, but ape is needed for constructing phylogenetic trees
+library(tidyverse) # self-explanatory, useful functions and ggplot() is helpful
+library(ggimage) # necessary for including images of hominin cranium in plot
+library(knitr) # kable tables 
+library(ggtree) # get a phylogenetic tree with nodes, note must install via BiocManager::install()
+```
+
+# Goals of the paper
+
+Biologists and paleontologists have long been interested genotype:phenotype (G:P) mapped traits; as in, phenotypic traits that have a clear, albeit likely pleiotropic and complex, genetic underpinning to them. It has been proposed G:P traits have use in elucidating phylogenetic trends across taxa. The authors of this paper, using G:P mapped dental traits test two hypotheses concerning the utility of G:P mapped traits.
+\
+\
+Hypothesis 1: G:P-mapped dental traits can provide evidence of phylogenetic history and selection, and therefore, are useful in paleontological investigations.
+\
+\
+Hypothesis 2: G:P-mapped traits reveal a range of morphological variation that cannot be predicted solely through extant variation.
+\
+\
+The goals of this paper are thus to show, in primates, that not only are G:P mapped dental traits useful in paleontology, but G:P mapped traits of fossil genera are necessary for understanding extant variation. 
+
+
+## Traits being measured
+
+The authors measure anterior and posterior molar width, as well as molar length. From these measurements, because anterior and posterior widths differ, I calculated molar areas using a trapezoidal area formaula. In terms of G:P mapped dental traits, molar module component ratio (MMC) is measured as length(M2)/length(P4), premolar-molar module ratio (PMM) is is measured as length(M3)/length(M1), and inhibitory cascade (IC) is measured as area(M3)/area(M1).
+\
+\
+IC is correlated with MMC, but is not a G:P mapped trait in primates. Nevertheless, it is included in summary statistics and model values. 
+
+# Scope of replication
+
+I have replicated summary descriptive statistics of molar areas and G:P mapped traits (including IC). For my model, I have used `geiger` to create phylogenetic ANOVAs of molar areas and G:P mapped traits. Lastly, for my plot, I used `ggplot` to create boxplots of G:P mapped traits across extant primates, alongside trait values for fossil primates and estimated ancestral state reconstruction values. 
+\
+\
+Only some of the data used in this analysis was available as open access through dryad. This dataset contains  dental measurements for the following species: _Presbytis rubicunda_, _Presbytis melapholos_, _Papio hamadryas_, _Macaca fascicularis_, _Colobus guereza_, and _Cercopithecus mitis_. Fossil genera alongside other extant primates (including some samples of species included in the available dataset) were not available; papers using those data are included in the Appendix. Thus, the goals of this replication are to illustrate whether this reduced data set creates results that are consistent with the full data set. 
+
+# Clean up the data
+
+Available data for replication comes from: https://datadryad.org/stash/dataset/doi:10.5061/dryad.693j8 using the txt file `all_linear_data.txt`. I then converted this data into a .csv file separating each data entry by space. 
+
+```{r}
+dental_measurements <- read_csv("all_linear_data.csv") %>% 
+  mutate(genus = ifelse(genus_species == "pres_rub" | # information is grouped by genus for ANOVA and summary
+                          genus_species == "pres_mel", "Presbytis", genus_species)) %>%
+  mutate(genus = ifelse(genus_species == "pap_ham", "Papio", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "mac_fas", "Macaca", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "col_guer", "Colobus", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "cercop_mit", "Cercopithecus", genus)) %>% 
+  # renaming genus_species to be the full name
+  mutate(species = ifelse(genus_species == "pres_rub", "Presbytis rubicunda", genus_species)) %>% 
+  mutate(species = ifelse(genus_species == "pres_mel", "Presbytis melapholos", species)) %>% 
+  mutate(species = ifelse(genus_species == "pap_ham", "Papio hamadryas", species)) %>% 
+  mutate(species = ifelse(genus_species == "mac_fas", "Macaca fascicularis", species)) %>% 
+  mutate(species = ifelse(genus_species == "col_guer", "Colobus guereza", species)) %>% 
+  mutate(species = ifelse(genus_species == "cercop_mit", "Cercopithecus mitis", species)) %>% 
+  filter(is.na(species) == F) %>% # remove NAs from data
+  mutate(tribe = ifelse(genus == "Cercopithecus", # ggplot is grouped by tribe 
+                  "Cercopithicini", genus)) %>% 
+  mutate(tribe = ifelse(genus == "Papio" | genus == "Macaca", 
+                  "Papionini", tribe)) %>% 
+  mutate(tribe = ifelse(genus == "Colobus" | genus == "Presbytis", 
+                  "Colobinae", tribe))
+dental_measurements$tribe <- factor(dental_measurements$tribe, levels = c("Cercopithicini", "Papionini", "Colobinae"))
+head(dental_measurements) # snapshot of the data frame
+```
+
+# Summary statistics
+
+These are the tables I intend to recreate:
+
+![Molar area summary statistics](datareplication_summarystats_areas.png)
+
+![G:P mapped dental traits](datareplication_sumarystats_gptraits.png)
+
+## Creating functions
+
+We first must create functions to calculate molar areas, alongside the genotype:phenotype mapped traits (again, MMC = molar module component ratio, PMM = premolar-molar module ratio, IC = inhibitory cascade trait).
+
+```{r, functions}
+trapezoid_area <- function(anterior, posterior, length){ # trapezoidal area is how calculations are done
+  area = (anterior + posterior) * length/2
+  return(area)
+} 
+
+mmc_fn <- function(m3l, m1l){ # this is the MMC function
+  mmc = m3l/m1l
+  return(mmc)
+}
+
+ic_fn <- function(m3area, m1area){ # this is the IC function
+  ic = m3area/m1area
+  return(ic)
+}
+
+pmm_fn <- function(m2l, p4l){ # this is the PMM function
+  pmm = m2l/p4l
+  return(pmm)
+}
+```
+
+## Mean area and standard deviation by molar
+
+Using the available data, I've created a table containing summary statistics for molar areas.
+
+```{r}
+m1area <- as.data.frame(trapezoid_area(anterior = dental_measurements$M1AW, # we use the trapezoid function
+                                                 dental_measurements$M1PW, 
+                                                 dental_measurements$M1L))
+m1area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m1area)
+colnames(m1area) <- c("genus", "species", "areaM1") 
+m1areasummary <- m1area %>% filter(is.na(areaM1) == F) %>% group_by(genus) %>% 
+  summarise(n = n(), avg_areaM1 = mean(areaM1), sd_areaM1 = sd(areaM1))
+
+# repeat for M2
+m2area <- as.data.frame(trapezoid_area(dental_measurements$M2AW,
+                                       dental_measurements$M2PW,
+                                       dental_measurements$M2L))
+m2area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m2area)
+colnames(m2area) <- c("genus", "species", "areaM2")
+m2areasummary <- m2area %>% filter(is.na(areaM2) == F) %>% group_by(genus) %>% 
+  summarise(avg_areaM2 = mean(areaM2), sd_areaM2 = sd(areaM2), n = n())
+
+# repeat again with M3
+m3area <- as.data.frame(trapezoid_area(dental_measurements$M3AW,
+                                       dental_measurements$M3PW,
+                                       dental_measurements$M3L))
+m3area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m3area)
+colnames(m3area) <- c("genus", "species", "areaM3")
+m3areasummary <- m3area %>% filter(is.na(areaM3) == F) %>% group_by(genus) %>% 
+  summarise(avg_areaM3 = mean(areaM3), sd_areaM3 = sd(areaM3), n = n())
+
+molar_areas <- mutate(m1areasummary, avg_areaM2 = m2areasummary$avg_areaM2, sd_areaM2 = m2areasummary$sd_areaM2, 
+       avg_areaM3 = m3areasummary$avg_areaM3, sd_areaM3 = m3areasummary$sd_areaM3) # create summary table
+kable(molar_areas,
+      caption = "Summary statistics for two-dimensional area traits")
+```
+
+Comparing against the published data:
+
+![Molar area summary statistics](datareplication_summarystats_areas.png)
+
+For all genera, all molar area summary statistics are less than the published data; however, there are no changes in general trends in the dataset.
+
+## PMM, MMC, and IC summary statistics
+
+I then did the same for genotype:phenotype mapped traits. 
+
+```{r, genotype-phenotype}
+# MMC
+MMC <- as.data.frame(mmc_fn(dental_measurements$M3L, dental_measurements$M1L))
+MMC <- cbind(dental_measurements$genus, dental_measurements$genus_species, MMC)
+colnames(MMC) <- c("genus", "species", "MMCvalue")
+
+# add to the dental_measurements df
+dental_measurements <- cbind(dental_measurements, MMC$MMCvalue) %>% rename("MMC" = "MMC$MMCvalue")
+
+# summary statistics
+MMCsummary <- MMC %>% filter(is.na(MMCvalue) == F) %>% group_by(genus) %>% 
+  summarise( n = n(), avgMMC = mean(MMCvalue), sdMMC = sd(MMCvalue))
+
+# PMM
+PMM <- as.data.frame(pmm_fn(dental_measurements$M2L, dental_measurements$P4BL))
+PMM <- cbind(dental_measurements$genus, dental_measurements$genus_species, PMM)
+colnames(PMM) <- c("genus", "species", "PMMvalue")
+
+# add to the dental measurements df
+dental_measurements <- dental_measurements %>% mutate(PMM = 
+                                                        PMM$PMMvalue)
+# repeat
+PMMsummary <- PMM %>% filter(is.na(PMMvalue) == F) %>% group_by(genus) %>% 
+  summarise(avgPMM = mean(PMMvalue), sd = sd(PMMvalue), n = n())
+# IC
+IC <- as.data.frame(ic_fn(m3area$areaM3, m1area$areaM1))
+IC <- cbind(dental_measurements$genus, dental_measurements$genus_species, IC)
+colnames(IC) <- c("genus", "species", "IC")
+# not included in ggplot, no need to readd to df
+ICsummary <- IC %>% filter(is.na(IC) == F) %>% group_by(genus) %>% 
+  summarise(avgIC = mean(IC), sd = sd(IC), n = n())
+
+genotype_phenotype_traits <- mutate(MMCsummary, avgPMM = PMMsummary$avgPMM, sdPMM = PMMsummary$sd, 
+       avgIC = ICsummary$avgIC, sdIC = ICsummary$sd) 
+kable(genotype_phenotype_traits,
+      caption = "Summary statistics for Genotype:Phenotype mapped traits")
+```
+
+Comparing against the published data:
+
+![G:P mapped dental traits](datareplication_sumarystats_gptraits.png)
+General trends across G:P mapped traits are consistent across these genera for both datasets although there are some differences.
+\
+\
+_Presbytis_: Average and standard deviation for MMC are identical to published data (sample is the same, confirms methods work); standard deviation for IC is identical as well. Average IC and standard deviation for MMC are less than published data. Average PMM is much less than in published data.
+\
+\
+_Papio_: Average and standard deviation for MMC, alongside standard deviation for PMM are identical to published data. Average PMM is greater than published data; and average IC and standard deviation for IC are less.
+\
+\
+_Macaca_: Average and standard deviation for MMC are identical to published data. Standard deviations for PMM and IC are identical to published data. Average PMM and IC are much less than published data. 
+\
+\
+_Colobus_: Average and standard deviation for MMC are identical to published data (sample is the same, confirms methods work). Standard deviations for PMM and IC are identical to published despite sample size differences. Average PMM and IC are much lower than published results.
+\
+\
+_Cercopithecus_: Average and standard deviation for MMC are identical to published data; standard deviation for IC is also identical. Average and standard deviation for PMM and average IC are less than the published values. 
+
+# Model (Phylogenetic ANOVA)
+
+The model I have chosen to replicate is:
+
+![Phylogenetic ANOVA](datareplication_phyloANOVA.png)
+
+## Building the phylogeny and cleaning data
+
+Following the procedure outlined in the paper, I downloaded a nexus file of primate phylogeny from the 10kTrees v.3 database. Within the nexus file, in TextEdit, I changed the date of divergence for _Presbytis rubicunda_ to be 1.3 million years ago since this data was not included (this is identical to the procedure done in the paper). 
+
+```{r, phylogeny, warning = F}
+primate.tree <- ape::read.nexus("datarep_phylogeny.nex") # import in nexus tree
+ggtree(primate.tree) + geom_nodepoint() + # construct ggtree and label nodes
+  geom_text(aes(label = node, hjust = -.4)) + 
+  geom_tiplab(aes(vjust = -1, hjust = 1)) + 
+  geom_cladelabel(node = 10, label = "", 
+                  color = "green4", offset = 1, align = F) + 
+  geom_cladelabel(node = 9, label="", 
+                  color = "steelblue3", offset = 1, align = T) +
+  geom_cladelabel(node = 1, label="", 
+                  color = "red4", offset = 1, align = T)
+```
+
+For aov.phylo, we look at genus level differences; however, our data must be subset by species. The following chunk gives summary statistics but groups by species, results for m1 are printed.
+
+```{r, summary_data_cleanup}
+m1areasummary <- m1area %>% filter(is.na(areaM1) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM1 = mean(areaM1), sd = sd(areaM1), n = n()); m1areasummary
+m2areasummary <- m2area %>% filter(is.na(areaM2) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM2 = mean(areaM2), sd = sd(areaM2), n = n())
+m3areasummary <- m3area %>% filter(is.na(areaM3) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM3 = mean(areaM3), sd = sd(areaM3), n = n())
+MMCsummary <- MMC %>% filter(is.na(MMCvalue) == F) %>% group_by(species) %>% 
+  summarise(avgMMC = mean(MMCvalue), sd = sd(MMCvalue), n = n())
+PMMsummary <- PMM %>% filter(is.na(PMMvalue) == F) %>% group_by(species) %>%
+  summarise(avgPMM = mean(PMMvalue), sd = sd(PMMvalue), n = n())
+ICsummary <- IC %>% filter(is.na(IC) == F) %>% group_by(species) %>% 
+  summarise(avgIC = mean(IC), sd = sd(IC), n = n())
+```
+
+
+In order to construct the phylogenetic ANOVA, using `aov.phylo()`, the data must also be cleaned as a factor variable. Measurements of interest must also be isolated. 
+
+```{r}
+genus_species <- as.factor(c(rep(0, 1), rep(1, 1), rep(2, 1), rep(3, 1), rep(4, 2))) # factor variable, presbytis gets two levels
+genera <- c("Cercopithecus", "Colobus", "Macaca", "Papio", "Presbytis") # creating for final table
+names(genus_species) = m1areasummary$species
+
+m1avg_area <- m1areasummary$avg_areaM1
+names(m1avg_area) <- m1areasummary$species
+m2avg_area <- m2areasummary$avg_areaM2
+names(m2avg_area) <- m2areasummary$species
+m3avg_area <- m3areasummary$avg_areaM3
+names(m3avg_area) <- m3areasummary$species
+avgMMC <- MMCsummary$avgMMC
+names(avgMMC) <- MMCsummary$species
+avgPMM <- PMMsummary$avgPMM
+names(avgPMM) <- PMMsummary$species
+avgIC <- ICsummary$avgIC
+names(avgIC) <- ICsummary$species
+```
+
+
+Here (Intercept) is _Cercopithecus_, group1 is _Colobus_, group2 is _Macaca_, group3 is _Papio_, and group4 is _Presbytis_.
+
+```{r, phyloAOV}
+set.seed(812)
+phyloAOV <- data.frame(genera)
+m1area_phyloAOV <- aov.phylo(m1avg_area~genus_species, phy = primate.tree, nsim = 1000) # 1000 simulations
+summary(m1area_phyloAOV) # we need to extract p-values alongside F statistic p-values
+# F given phylogeny = 0.01798
+
+phyloAOV <- phyloAOV %>% mutate(m1area = summary(m1area_phyloAOV)$coefficients[, "Pr(>|t|)"]) # isolate p values and add to data frame
+
+m2area_phyloAOV <- aov.phylo(m2avg_area~genus_species, phy = primate.tree, nsim = 1000) # m2area
+# summary(m2area_phyloAOV)
+# F = 0.01499
+
+m3area_phyloAOV <- aov.phylo(m3avg_area~genus_species, phy = primate.tree, nsim = 1000) # m3
+# summary(m3area_phyloAOV)
+# F = 0.000999
+
+MMC_phyloAOV <- aov.phylo(avgMMC~genus_species, phy = primate.tree, nsim = 1000) # MMC
+# summary(MMC_phyloAOV)
+# F = 0.1499
+
+PMM_phyloAOV <- aov.phylo(avgPMM~genus_species, phy = primate.tree, nsim = 1000) # PMM
+# summary(PMM_phyloAOV)
+# F = 0.002997
+
+IC_phyloAOV <- aov.phylo(avgIC~genus_species, phy = primate.tree, nsim = 1000) # IC
+# summary(IC_phyloAOV)
+# F = 0.0969
+
+phyloAOV <- phyloAOV %>% mutate(m2area = summary(m2area_phyloAOV)$coefficients[, "Pr(>|t|)"],
+                                m3area = summary(m3area_phyloAOV)$coefficients[, "Pr(>|t|)"],
+                                IC = summary(IC_phyloAOV)$coefficients[, "Pr(>|t|)"],
+                                MMC = summary(MMC_phyloAOV)$coefficients[, "Pr(>|t|)"],
+                                PMM = summary(PMM_phyloAOV)$coefficients[, "Pr(>|t|)"])
+                                # add all to data frame
+kable(phyloAOV,
+      caption = "Phylogenetic ANOVA p-values for genus level effects on dental traits")
+
+f_statistics <- as.data.frame(matrix(nrow = 1, ncol = 6))
+names(f_statistics) = c("m1area", "m2area", "m3area", "MMC", "PMM", "IC")
+f_statistics[1,] = c(0.01798, 0.01499, 0.000999, 0.1499, 0.002997, 0.0969)
+kable(f_statistics,
+      caption = "Phylogenetic ANOVA p-values for each dental trait")
+
+```
+
+Comparing against published data:
+\
+\
+![Phylogenetic ANOVA](datareplication_phyloANOVA.png)
+
+P-values evidently differ between the published data and the subset provided; differences in statistical conclusions for each genus are reported:
+\
+\
+_Presbytis_: M1Area, M2Area, M3Area are all insignificant in the subset. IC and MMC are consistent. PMM is significant (p=0.002).
+\
+\
+_Papio_: IC and MMC are both insignificant in the subsetted ANOVA. All other traits are significant.
+\
+\
+_Macaca_: M3Area (p=0.0049) and PMM (p=0.013) are significant. All other traits are insignificant.
+\
+\
+_Colobus_: M3Area (p=0.0040) and PMM (p=0.0036) are significant. All other traits are insignificant.
+\
+\
+_Cercopithecus_: All traits are significant, including PMM (p=0.00043).
+\
+\
+With a reduced phylogeny, it makes sense that p-values would differ radically. For instance, variation in other extant genera illustrating _Presbytis_' relative significant M1,M2, and M3Areas is omitted in this reduced dataset. The divergence in results should not be concerning but rather illustrates the effects of including/excluding other groups in an ANOVA.
+\
+\
+Regarding differences in trait values across these five genera, IC and MMC are insignificant in the subsetted dataset. This result could be a result of excluding other groups (and more variation) or could be indicative of less variation in these traits among these five genera.
+
+# Plot (Boxplots of PMM, MMC)
+
+Plot I intend to replicate: 
+
+![Boxplot](datareplication_plot.png)
+
+## Ancestral state reconstruction
+
+Ancestral state reconstruction are estimated values for a trait (MMC and PMM here) at specified tree nodes (nodes 7-11, see above tree).
+
+```{r, ASR}
+contMap(primate.tree, avgMMC)
+ancestralMMC <- fastAnc(primate.tree, avgMMC)
+contMap(primate.tree, avgPMM)
+ancestralPMM <- fastAnc(primate.tree, avgPMM) # differences in cercopithicus and colobus in MMC/PMM are very interesting here!
+ancestral_nodes <- data.frame(ASR_MMC = ancestralMMC, ASR_PMM = ancestralPMM)
+```
+
+## More data cleanup
+
+The paper assigns ASR estimations MMC and PMM accordingly to ancestral fossils based on phylogeny and plausible ASR values. Because only some of the extant species are included in the available data, I attempted to match as closely as possible to the original data set. 
+
+```{r, ancestral_fossils}
+ancestral_fossils <- data.frame(Fossil_rep = c("Victoriapithecus", "Procercocebus", "Soromandrillus", 
+                                               "Parapapio", "Pliopapio", "Paracolobus", "Cercopithecoides", "Kuseracolobus", "Libypithecus", "cf. Chlorocebus", "Colobus sp."), 
+                                tribe = c("", "Papionini", "Papionini", "Papionini", "Papionini", "Colobinae", "Colobinae", "Colobinae", "Colobinae", "Cercopithicini", "Colobinae"), 
+                                MMC = c(1.03, 1.13, 1.28, 1.18, 1.20, 1.16, 1.18, 1.17, 1.14, 0.98, 1.06),
+                                PMM = c(1.59, 1.62, 1.78, 1.76, 1.72, 1.50, 1.67, 1.75, 1.41, 1.56, 1.44)
+)
+
+# note that these nodes are being assigned based on the tree in paper alongside how well ASR values match
+ancestral_nodes <- ancestral_nodes %>% 
+  # concrete matching is outside the scope of this replication, matching ASR values for sake of ggplot()!
+  mutate(closest_fossil_rep = 
+           c("Victoriapithecus", "cf. Chlorocebus", "Procercocebus", "Libypithecus", "Paracolobus"),
+         tribe = c("", "Cercopithicini", "Papionini", "Colobinae", "Colobinae"),
+         nodes = c("N7", "N8", "N9", "N10", "N11"))
+```
+
+## Boxplot
+
+I am trying to recreate the ggplot in the paper as best I can.
+
+```{r, ggplots}
+library(curl) # failed to compile (because of BiocManager?), loading curl just in case
+# note I have an earlier version of this document pushed to GitHub that tried to remove the fossil genera from the x-axis using patchwork and gridExtra, was not a success
+MMC_ggplot <- ancestral_fossils %>% ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") + 
+  geom_boxplot(data = ancestral_nodes, aes(x = closest_fossil_rep, y = ASR_MMC, color = nodes)) + 
+  # using a boxplot to delineate ASR states
+  geom_boxplot(data = dental_measurements, aes(x = genus, y = MMC, fill = tribe)) +
+  facet_grid(.~tribe, scales = "free_x", space = "free") +
+  theme(axis.title.x = element_blank(), 
+        panel.spacing = unit(0, "lines"),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.background = element_rect(color = "black")) +
+  guides(fill = F); MMC_ggplot # guides removes the tribe coloring in legend
+
+PMM_ggplot <- ancestral_fossils %>% ggplot(aes(x = Fossil_rep, y = PMM)) +
+ geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(1, 2) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") + 
+  geom_boxplot(data = ancestral_nodes, aes(x = closest_fossil_rep, y = ASR_PMM, color = nodes)) + 
+  geom_boxplot(data = dental_measurements, aes(x = genus, y = PMM, fill = tribe)) +
+  facet_grid(.~tribe, scales = "free_x", space = "free") +
+  theme(axis.title.x = element_blank(), 
+        panel.spacing = unit(0, "lines"),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.background = element_rect(color = "black")) +
+  guides(fill = F); PMM_ggplot
+```
+
+![Boxplot](datareplication_plot.png)
+
+# Comparison of results
+
+The descriptive statistics I provide illustrate differences between the two datasets; my estimates are generally a bit lower than those provided in the paper. My phylogenetic ANOVA differs from the paper however. Across cercopithecids, I found that all traits except IC and MMC vary significantly across taxa. Significance in a trait, on a genus level, is associated with differentiation of a trait relative to other taxa. Like the paper, I found _Papio_ to be highly significant for most traits (indicating divergence); however, MMC and IC are insignificant. Perhaps (when omitting other species), these traits in _Papio_ appear similar to _Macaca_ when ran through the ANOVA. Surprisingly, _Presbytis_ was highly insignificant in molar area compared to the paper. The authors hypothesize morphological differences in _Presbytis_ are unexplained by G:P mapped traits; however, my results show there is no difference in both molar mophology nor in G:P mapped traits. My inconsistency is probably a result of the missing data, maybe including _Nasalis_ (alongside other colobines) would key into differences. Another major difference between the two analyses worth noting is the significance of M3Area in _Macaca_. Maybe _Macaca_ appears more distinct when removing other papionins and cercopithicins.
+\
+\
+The boxplot appears relatively similar to that in the paper. I was unable to replicate it perfectly (e.g., I'm unsure which aesthetics are being used for the ancestral nodes in the paper), but I was able to replicate to the best of my ability. I included nodes on in a separate legend to keep the plot itself less cluttered. Concerning ASR, like the paper my ASR values are noticeably smaller than the fossil genera. 
+\
+\
+The authors find support for Hypothesis 1, showing high heritability of G:P mapped traits (not part of my replication). As seen in my replication, MMC and IC are consistent, in line with the notion that these traits have a common genetic underpinning to captured variation. ASR values are skewed heavily (moreso in my data) by extant genera ("the tyranny of the present"). Because of this discrepancy in ASR values, I find support for Hypothesis 2. 
+\
+\
+Through this data replication, I learned more about the R environment alongside `tidyverse` (e.g., `theme_bw()` breaks the plot). Although my dataset is incomplete relative to that of the paper, I am convinced of the statistics the authors use as well as their conclusions. Even with a smaller dataset, and the limitations associated, I've found agreement with the authors' conclusions. I gained an appreciation of the sensitivity of ANOVAs to including/excluding groups; while I'm not one to rely heavily on ANOVAs in general, I think I'll be using GLMMs (when looking at variation in a continuous trait in accordance with categorical groups) in the future as a result. 
+
+# References
+
+Grieco, Theresa M.; Rizk, Oliver T.; Hlusko, Leslea J. (2012). Data from: A modular framework characterizes micro- and macroevolution of Old World monkey dentitions [Dataset]. Dryad. https://doi.org/10.5061/dryad.693j8
+\
+\
+Hlusko, L.J.; Schmitt, C.A.; Monson, T.A.; Brasil, M.F.; Mahaney, M.C. The Integration of quantitative genetics, paleontology, and
+neontology reveals genetic underpinnings of primate dental evolution. Proc. Natl. Acad. Sci. USA 2016, 113, 9262–9267. [CrossRef]
+\
+\
+Monson, T.A.; Brasil, M.F.; Mahaney, M.C.; Schmitt, C.A.; Taylor, C.E.; Hlusko, L.J. Keeping 21st Century Paleontology Grounded: Quantitative Genetic Analyses and Ancestral State Reconstruction Re-Emphasize the Essentiality of Fossils. Biology 2022, 11, 1218. https://doi.org/10.3390/ biology11081218
+
+# Appendix
+
+## Other data, not public, included in original paper
+
+Frost, S.R. Fossil Cercopithecidae from the Afar Depression, Ethiopia: Species Systematics and Comparison to the Turkana Basin. Doctoral Dissertation, City University of New York, New York, NY, USA, 2001.
+\
+\
+Frost, S.R.; Alemseged, Z. Middle Pleistocene fossil Cercopithecidae from Asbole, Afar Region, Ethiopia. J. Hum. Evol. 2007, 53, 227–259. [CrossRef] [PubMed]
+\
+\
+
+Freedman, L. The fossil Cercopithecoidea of South Africa. Ann. Transvaal Mus. 1957, 23, 121–262.
+\
+\
+Frost, S.R.; Haile-Selassie, Y.; Hlusko, L.J. Chapter 6 Cercopithecidae. In Ardipithecus kadabba: Late Miocene Evidence from Middle Awash, Ethiopia; Haile-Selassie, Y., WoldeGabriel, G., Eds.; University of California Press: Berkeley, CA, USA, 2009.
+\
+\
+Frost, S.R.; Jablonski, N.G.; Haile-Selassie, Y. Early Pliocene Cercopithecidae from Woranso-Mille (Central Afar, Ethiopia) and the origins of the Theropithecus oswaldi lineage. J. Hum. Evol. 2014, 76, 39–53. [CrossRef] [PubMed]
+\
+\
+Frost, S.R. Fossil Cercopithecidae from the Middle Pleistocene Dawaitoli Formation, Middle Awash Valley, Afar Region, Ethiopia. Am. J. Phys. Anthropol. 2007, 134, 460–471. [CrossRef]
+\
+\
+Frost, S.R.; Marcus, L.F.; Bookstein, F.L.; Reddy, D.P.; Delson, E. Cranial allometry, phylogeography, and systematics of large- bodied papionins (Primates: Cercopithecinae) inferred from geometric morphometric analysis of landmark data. Anat. Rec. 2003, 275A, 1048–1072. [CrossRef]
+\
+\
+Hlusko, L.J. A new large Pliocene colobine species (Mammalia: Primates) from Asa Issie, Ethiopia. Geobios 2006, 39, 57–69. [CrossRef]
+\
+\
+Hlusko, L.J. A new late Miocene species of Paracolobus and other Cercopithecoidea (Mammalia: Primates) fossils from Lemudong’o, Kenya. Kirtlandia 2007, 56, 72–85.
+\
+\
+Benefit, B.K. The permanent dentition and phylogenetic position of Victoriapithecus from Maboko Island, Kenya. J. Hum. Evol. 1993, 25, 83–172. [CrossRef]
