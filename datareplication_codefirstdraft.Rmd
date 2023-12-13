@@ -1,0 +1,352 @@
+---
+title: "Keeping 21st Century Paleontology Grounded"
+author: "Jimmy Erkens"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r,loadin}
+library(tidyverse)
+library(geiger)
+dental_measurements <- read_csv("all_linear_data.csv") %>% 
+  mutate(genus = ifelse(genus_species == "pres_rub" | genus_species == "pres_mel", "Presbytis", genus_species)) %>%
+  mutate(genus = ifelse(genus_species == "pap_ham", "Papio", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "mac_fas", "Macaca", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "col_guer", "Colobus", genus)) %>% 
+  mutate(genus = ifelse(genus_species == "cercop_mit", "Cercopithecus", genus)) %>% 
+  filter(is.na(genus_species) == F) 
+
+```
+
+```{r, functions}
+trapezoid_area <- function(anterior, posterior, length){ # how we get area
+  area = (anterior + posterior) * length/2
+  return(area)
+} 
+# i'm going to forget what these calcs are even tho they're simple
+# hence why function
+mmc_fn <- function(m3l, m1l){ 
+  mmc = m3l/m1l
+  return(mmc)
+}
+
+ic_fn <- function(m3area, m1area){
+  ic = m3area/m1area
+  return(ic)
+}
+
+pmm <- function(m2l, p4l){
+  pmm = m2l/p4l
+  return(pmm)
+}
+```
+
+# Descriptive Statistics
+
+On molar averages!
+
+```{r, descriptive}
+m1area <- as.data.frame(trapezoid_area(anterior = dental_measurements$M1AW, # work the trapezoid situation
+                                                 dental_measurements$M1PW, 
+                                                 dental_measurements$M1L))
+m1area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m1area)
+colnames(m1area) <- c("genus", "species", "areaM1") 
+m1areasummary <- m1area %>% filter(is.na(areaM1) == F) %>% group_by(genus) %>% # gorgeous summary
+  summarise(n = n(), avg_areaM1 = mean(areaM1), sd_areaM1 = sd(areaM1)); m1areasummary
+# in the paper all presbytis gets lumped, we look at genus <3
+
+# same situation but in Molar 2
+m2area <- as.data.frame(trapezoid_area(dental_measurements$M2AW,
+                                       dental_measurements$M2PW,
+                                       dental_measurements$M2L))
+m2area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m2area)
+colnames(m2area) <- c("genus", "species", "areaM2")
+m2areasummary <- m2area %>% filter(is.na(areaM2) == F) %>% group_by(genus) %>% 
+  summarise(avg_areaM2 = mean(areaM2), sd_areaM2 = sd(areaM2), n = n()); m2areasummary
+
+# same situation but again and molar 3
+m3area <- as.data.frame(trapezoid_area(dental_measurements$M3AW,
+                                       dental_measurements$M3PW,
+                                       dental_measurements$M3L))
+m3area <- cbind(dental_measurements$genus, dental_measurements$genus_species, m3area)
+colnames(m3area) <- c("genus", "species", "areaM3")
+m3areasummary <- m3area %>% filter(is.na(areaM3) == F) %>% group_by(genus) %>% 
+  summarise(avg_areaM3 = mean(areaM3), sd_areaM3 = sd(areaM3), n = n()); m3areasummary
+
+mutate(m1areasummary, avg_areaM2 = m2areasummary$avg_areaM2, sd_areaM2 = m2areasummary$sd_areaM2, 
+       avg_areaM3 = m3areasummary$avg_areaM3, sd_areaM3 = m3areasummary$sd_areaM3)
+```
+
+On PMC MMC and IC!
+
+```{r, genotype-phenotyped}
+# functions, go up to fns to remidn myself what's up
+# MMC
+MMC <- as.data.frame(mmc_fn(dental_measurements$M3L, dental_measurements$M1L))
+MMC <- cbind(dental_measurements$genus, dental_measurements$genus_species, MMC)
+colnames(MMC) <- c("genus", "species", "MMC")
+MMCsummary <- MMC %>% filter(is.na(MMC) == F) %>% group_by(genus) %>% # gorgeous summary
+  summarise( n = n(), avgMMC = mean(MMC), sd = sd(MMC)); MMCsummary
+
+
+# PMM
+PMM <- as.data.frame(pmm(dental_measurements$M2L, dental_measurements$P4BL))
+PMM <- cbind(dental_measurements$genus, dental_measurements$genus_species, PMM)
+colnames(PMM) <- c("genus", "species", "PMM")
+PMMsummary <- PMM %>% filter(is.na(PMM) == F) %>% group_by(genus) %>% # gorgeous summary
+  summarise(avgPMM = mean(PMM), sd = sd(PMM), n = n()); PMMsummary
+
+# IC
+IC <- as.data.frame(ic_fn(m3area$areaM3, m1area$areaM1))
+IC <- cbind(dental_measurements$genus, dental_measurements$genus_species, IC)
+colnames(IC) <- c("genus", "species", "IC")
+ICsummary <- IC %>% filter(is.na(IC) == F) %>% group_by(genus) %>% # gorgeous summary
+  summarise(avgIC = mean(IC), sd = sd(IC), n = n()); ICsummary
+```
+
+# Model
+
+- Phylogenetic ANOVA using `geiger` <- this is my model
+
+
+```{r, grouping_by_species}
+# creating clean data frame that allows us to group by species
+m1areasummary <- m1area %>% filter(is.na(areaM1) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM1 = mean(areaM1), sd = sd(areaM1), n = n())
+m2areasummary <- m2area %>% filter(is.na(areaM2) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM2 = mean(areaM2), sd = sd(areaM2), n = n())
+m3areasummary <- m3area %>% filter(is.na(areaM3) == F) %>% group_by(species) %>% 
+  summarise(avg_areaM3 = mean(areaM3), sd = sd(areaM3), n = n())
+MMCsummary <- MMC %>% filter(is.na(MMC) == F) %>% group_by(species) %>% # gorgeous summary
+  summarise(avgMMC = mean(MMC), sd = sd(MMC), n = n())
+PMMsummary <- PMM %>% filter(is.na(PMM) == F) %>% group_by(species) %>% # gorgeous summary
+  summarise(avgPMM = mean(PMM), sd = sd(PMM), n = n())
+ICsummary <- IC %>% filter(is.na(IC) == F) %>% group_by(species) %>% 
+  summarise(avgIC = mean(IC), sd = sd(IC), n = n())
+# was going to make a data frame, not anymore, decided would be too much man
+```
+
+```{r, data_init_aov}
+library(ape)
+ape.tree <- ape::read.nexus("datarep_phylogeny.nex")
+plot(ape.tree)
+# grouping by species, needed for phylogenetic analysis.
+
+genus_species <- as.factor(c(rep(0, 1), rep(1, 1), rep(2, 1), rep(3, 1), rep(4, 2)))
+names(genus_species) = m1areasummary$species
+
+# aov.phylo is super finnicky for no reason :(
+m1avg_area <- m1areasummary$avg_areaM1
+names(m1avg_area) <- m1areasummary$species
+m2avg_area <- m2areasummary$avg_areaM2
+names(m2avg_area) <- m2areasummary$species
+m3avg_area <- m3areasummary$avg_areaM3
+names(m3avg_area) <- m3areasummary$species
+avgMMC <- MMCsummary$avgMMC
+names(avgMMC) <- MMCsummary$species
+avgPMM <- PMMsummary$avgPMM
+names(avgPMM) <- PMMsummary$species
+avgIC <- ICsummary$avgIC
+names(avgIC) <- ICsummary$species
+```
+
+
+
+```{r, phyloAOVM1area}
+set.seed(812)
+# m1 area
+m1area_phyloAOV <- aov.phylo(m1avg_area~genus_species, phy = ape.tree, nsim = 1000)
+summary(m1area_phyloAOV)
+
+```
+
+```{r, phyloAOVm2}
+set.seed(812)
+m2area_phyloAOV <- aov.phylo(m2avg_area~genus_species, phy = ape.tree, nsim = 1000)
+summary(m2area_phyloAOV)
+```
+
+```{r, phyloAOVm3}
+set.seed(812)
+m3area_phyloAOV <- aov.phylo(m3avg_area~genus_species, phy = ape.tree, nsim = 1000)
+summary(m3area_phyloAOV)
+```
+
+```{r, phyloAOVMMC}
+set.seed(812)
+MMC_phyloAOV <- aov.phylo(avgMMC~genus_species, phy = ape.tree, nsim = 1000)
+summary(MMC_phyloAOV)
+```
+
+```{r, phyloAOVPMM}
+set.seed(812)
+PMM_phyloAOV <- aov.phylo(avgPMM~genus_species, phy = ape.tree, nsim = 1000)
+summary(PMM_phyloAOV)
+```
+
+```{r, phyloAOVIC}
+set.seed(812)
+IC_phyloAOV <- aov.phylo(avgIC~genus_species, phy = ape.tree, nsim = 1000)
+summary(IC_phyloAOV)
+```
+
+- going to have to use `contMap` to generate ASR values
+- then use `fastAnc` w phytools, actually no we don't <3
+
+
+```{r}
+contMap(ape.tree, avgMMC)
+fastAnc(ape.tree, avgMMC)
+```
+
+
+# Plot
+
+```{r, run_once}
+dental_measurements <- dental_measurements %>%
+  cbind(PMM = PMM$PMM,
+         MMC = MMC$MMC,
+         IC = IC$IC,
+         m1area = m1area$areaM1,
+         m2area = m2area$areaM2,
+         m3area = m3area$areaM3)
+```
+
+```{r, ggplot}
+library(ggimage)
+library(patchwork)
+library(gridExtra)
+dental_measurements <- dental_measurements %>% 
+  mutate(tribe = ifelse(genus == "Cercopithecus", 
+                  "Cercopithicini", genus)) %>% 
+  mutate(tribe = ifelse(genus == "Papio" | genus == "Macaca", 
+                  "Papionini", tribe)) %>% 
+  mutate(tribe = ifelse(genus == "Colobus" | genus == "Presbytis", 
+                  "Colobinae", tribe))
+dental_measurements$tribe <- factor(dental_measurements$tribe, levels = c("Cercopithicini", "Papionini", "Colobinae"))
+
+# copying and pasting from pdf, why it looks janky
+ancestral_fossils <- data.frame(Fossil_rep = c("Victoriapithecus", "Procercocebus", "Soromandrillus", 
+                                               "Parapapio", "Pliopapio", "Paracolobus", "Cercopithecoides", "Kuseracolobus", "Libypithecus", "cf. Chlorocebus", "Colobus sp."), 
+                                tribe = c("", "Papionini", "Papionini", "Papionini", "Papionini", "Colobinae", "Colobinae", "Colobinae", "Colobinae", "Cercopithicini", "Colobinae"), 
+                                MMC = c(1.03, 1.13, 1.28, 1.18, 1.20, 1.16, 1.18, 1.17, 1.14, 0.98, 1.06),
+                                PMM = c(1.59, 1.62, 1.78, 1.76, 1.72, 1.50, 1.67, 1.75, 1.41, 1.56, 1.44),
+                                image = rep(c("https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png"), 11)
+)
+```
+
+```{r}
+# tried doing patchwork, wasn't working perfectly
+# all this to remove certain facet labels
+library(tidyverse)
+library(ggimage)
+MMCvict <- ancestral_fossils %>% filter(Fossil_rep == "Victoriapithecus") %>% 
+  ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") +
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(),
+        legend.position = "none"
+        )
+colobus_xaxis <- c("", "Colobus", "", "", "", "", "Presbytis")
+MMCcolob <- ancestral_fossils %>% filter(tribe == "Colobinae") %>% 
+  ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") +
+  geom_boxplot(data = filter(dental_measurements, tribe == "Colobinae"), aes(x = genus, y = MMC), fill = "gold") +
+  scale_x_discrete(labels = colobus_xaxis) +
+  theme(axis.title.x = element_blank(), 
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none" 
+        )
+
+cercs_xaxis <- c("Cercopithecus", "")
+MMCcercs <- ancestral_fossils %>% filter(tribe == "Cercopithicini") %>% 
+  ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") +
+  geom_boxplot(data = filter(dental_measurements, tribe == "Cercopithicini"), aes(x = genus, y = MMC), 
+               fill = "blue") +
+  scale_x_discrete(labels = cercs_xaxis) +
+  theme(axis.title.x = element_blank(), 
+        axis.text.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none" 
+        )
+
+papio_xaxis <- c("Macaca", "Papio", "", "", "", "")
+MMCpapio <- ancestral_fossils %>% filter(tribe == "Papionini") %>% 
+  ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = "https://upload.wikimedia.org/wikipedia/commons/thumb/7/75/Australopithecus_Skull.png/652px-Australopithecus_Skull.png") +
+  geom_boxplot(data = filter(dental_measurements, tribe == "Papionini"), aes(x = genus, y = MMC), 
+               fill = "purple") +
+ scale_x_discrete(labels = papio_xaxis) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none",
+        plot.margin = unit(c(0,0,0,0), "cm")
+        )
+library(cowplot)
+plot_grid(MMCvict, MMCcercs, MMCpapio, MMCcolob, nrow = 1, align = "h", rel_widths = c(1, 1))
+grid.arrange(MMCvict, MMCcercs, MMCpapio, MMCcolob, nrow = 1)
+```
+
+```{r}
+
+MMC_ggplot <- ancestral_fossils %>% ggplot(aes(x = Fossil_rep, y = MMC)) +
+  geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(0.75, 1.5) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = ancestral_fossils$image) + 
+  geom_boxplot(data = dental_measurements, aes(x = genus, y = MMC, fill = tribe)) +
+  facet_grid(.~tribe, scales = "free_x", space = "free") +
+  theme(axis.title.x = element_blank(), 
+        panel.spacing = unit(0, "lines"),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.background = element_rect(color = "black"),
+        legend.position = "none"
+        ) 
+#+
+  #geom_text(position = position_dodge(width = 1), aes(label = tribe, x = tribe, y = 0.75))
+
+MMC_ggplot
+  
+PMM_ggplot <- ancestral_fossils %>% ggplot(aes(x = Fossil_rep, y = PMM)) +
+ geom_text(aes(label = Fossil_rep, angle = 90), size = 3, position = position_nudge(y = 0.12)) +
+  ylim(1, 2) +
+  geom_point(position = position_dodge(preserve = "single")) +
+  geom_image(image = ancestral_fossils$image) + 
+  geom_boxplot(data = dental_measurements, aes(x = genus, y = PMM, fill = tribe)) +
+  facet_grid(.~tribe, scales = "free_x", space = "free") +
+  theme(axis.title.x = element_blank(), 
+        panel.spacing = unit(0, "lines"),
+        axis.text = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.background = element_rect(color = "black"),
+        axis.text.x = element_blank(),
+        legend.position = "none"
+        ) 
+
+PMM_ggplot
+
+grid.arrange(PMM_ggplot, MMC_ggplot, nrow = 2)
+```
+
+
+
